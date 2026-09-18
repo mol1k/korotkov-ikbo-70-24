@@ -9,6 +9,9 @@
     model> get_recent_prompts()
 
 Служебные команды: help, now, exit, quit.
+
+С ключом --remote HOST:PORT команды выполняются на сервере RPC
+через клиент src.client.RpcClient.
 """
 import argparse
 import ast
@@ -17,9 +20,11 @@ import sys
 import time
 
 from src import model
+from src.client import RpcClient
 from src.errors import ModelError, ProtocolError
 
 PROMPT = "model> "
+REMOTE_PROMPT = "rpc> "
 EXIT_COMMANDS = ("exit", "quit")
 COMMANDS = tuple(function.__name__ for function in model.API)
 
@@ -104,15 +109,16 @@ def execute(backend, line):
     return format_result(result)
 
 
-def run(backend, echo=False):
+def run(backend, echo=False, prompt=PROMPT):
     """Запустить цикл чтения и выполнения команд.
 
     :param echo: печатать введённую команду (при вводе из файла).
+    :param prompt: приглашение к вводу.
     """
     print("REPL модели данных. Справка: help, выход: exit.")
     while True:
         try:
-            line = input(PROMPT)
+            line = input(prompt)
         except EOFError:
             print()
             break
@@ -129,8 +135,17 @@ def main():
     """Точка входа: python -m src.repl."""
     parser = argparse.ArgumentParser(
         description="REPL для модели слоя работы с данными")
-    parser.parse_args()
-    run(model, echo=not sys.stdin.isatty())
+    parser.add_argument(
+        "--remote", metavar="HOST:PORT",
+        help="выполнять команды на сервере RPC")
+    args = parser.parse_args()
+    echo = not sys.stdin.isatty()
+    if args.remote is None:
+        run(model, echo)
+        return
+    host, _, port = args.remote.rpartition(":")
+    with RpcClient(host, int(port)) as client:
+        run(client, echo, REMOTE_PROMPT)
 
 
 if __name__ == "__main__":
