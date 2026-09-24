@@ -35,6 +35,7 @@ RESPONSE_CODE_SIZE = 2
 RESPONSE_LENGTH_SIZE = 4
 RESPONSE_HEADER_SIZE = RESPONSE_CODE_SIZE + RESPONSE_LENGTH_SIZE
 MAX_BODY_SIZE = 1024 * 1024
+VALUES_PER_ARGUMENT = 1
 
 OPERATIONS = (
     "create_client", "get_clients", "update_client",
@@ -80,25 +81,49 @@ def _text_element(tag, text):
     return element
 
 
+def _encode_none(value):
+    """Закодировать None."""
+    return ElementTree.Element("none")
+
+
+def _encode_int(value):
+    """Закодировать целое число."""
+    return _text_element("int", str(value))
+
+
+def _encode_str(value):
+    """Закодировать строку, допустимую в XML."""
+    if not _XML_TEXT.fullmatch(value):
+        raise ProtocolError("строка содержит символы, недопустимые в XML")
+    return _text_element("str", value)
+
+
+def _encode_list(value):
+    """Закодировать список значений."""
+    element = ElementTree.Element("list")
+    element.extend(value_to_xml(item) for item in value)
+    return element
+
+
+ENCODERS = {
+    type(None): _encode_none,
+    int: _encode_int,
+    str: _encode_str,
+    list: _encode_list,
+    tuple: _encode_list,
+}
+
+
 def value_to_xml(value):
     """Преобразовать значение (None, int, str, list) в элемент XML.
 
     :raises ProtocolError: если тип значения не поддерживается.
     """
-    if value is None:
-        return ElementTree.Element("none")
-    if type(value) is int:
-        return _text_element("int", str(value))
-    if type(value) is str:
-        if not _XML_TEXT.fullmatch(value):
-            raise ProtocolError("строка содержит символы, недопустимые в XML")
-        return _text_element("str", value)
-    if type(value) in (list, tuple):
-        element = ElementTree.Element("list")
-        element.extend(value_to_xml(item) for item in value)
-        return element
-    raise ProtocolError(
-        f"тип {type(value).__name__} не поддерживается протоколом")
+    encoder = ENCODERS.get(type(value))
+    if encoder is None:
+        raise ProtocolError(
+            f"тип {type(value).__name__} не поддерживается протоколом")
+    return encoder(value)
 
 
 def _parse_int(text):
@@ -109,20 +134,23 @@ def _parse_int(text):
         raise ProtocolError(f"некорректное целое число {text!r}") from None
 
 
+DECODERS = {
+    "none": lambda element: None,
+    "int": lambda element: _parse_int(element.text),
+    "str": lambda element: element.text or "",
+    "list": lambda element: [xml_to_value(child) for child in element],
+}
+
+
 def xml_to_value(element):
     """Преобразовать элемент XML в значение Python.
 
     :raises ProtocolError: если элемент имеет неизвестный тег.
     """
-    if element.tag == "none":
-        return None
-    if element.tag == "int":
-        return _parse_int(element.text)
-    if element.tag == "str":
-        return element.text or ""
-    if element.tag == "list":
-        return [xml_to_value(child) for child in element]
-    raise ProtocolError(f"неизвестный тип значения <{element.tag}>")
+    decoder = DECODERS.get(element.tag)
+    if decoder is None:
+        raise ProtocolError(f"неизвестный тип значения <{element.tag}>")
+    return decoder(element)
 
 
 def _parse(body):
@@ -159,8 +187,6 @@ def unpack_request_header(header):
 
 def encode_request(name, arguments):
     """Закодировать вызов функции name с именованными аргументами."""
-    if name not in OPCODES:
-        raise ProtocolError(f"неизвестная операция {name}")
     root = ElementTree.Element("request")
     for key, value in arguments.items():
         argument = ElementTree.SubElement(root, "arg", name=key)
@@ -179,7 +205,8 @@ def decode_arguments(body):
     arguments = {}
     for argument in root:
         name = argument.get("name")
-        if argument.tag != "arg" or name is None or len(argument) != 1:
+        if (argument.tag != "arg" or name is None
+                or len(argument) != VALUES_PER_ARGUMENT):
             raise ProtocolError(
                 "аргумент должен иметь вид <arg name=\"...\">значение</arg>")
         arguments[name] = xml_to_value(argument[0])

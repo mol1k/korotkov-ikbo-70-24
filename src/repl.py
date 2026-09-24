@@ -82,6 +82,37 @@ def help_text():
     return "\n".join(lines)
 
 
+def current_time_text():
+    """Вернуть текущее Unix-время в виде текста."""
+    return str(int(time.time()))
+
+
+SERVICE_COMMANDS = {"help": help_text, "now": current_time_text}
+ERROR_FORMATS = (
+    ((ModelError, ProtocolError), "Ошибка {kind}: {error}"),
+    ((SyntaxError, ValueError, TypeError), "Ошибка ввода: {error}"),
+    ((ConnectionError,), "Ошибка соединения: {error}"),
+)
+HANDLED_ERRORS = tuple(
+    kind for kinds, _ in ERROR_FORMATS for kind in kinds)
+
+
+def describe_error(error):
+    """Вернуть текст сообщения об ошибке для пользователя."""
+    for kinds, template in ERROR_FORMATS:
+        if isinstance(error, kinds):
+            return template.format(kind=type(error).__name__, error=error)
+    return str(error)
+
+
+def _call(backend, command):
+    """Разобрать команду, вызвать функцию и оформить результат."""
+    name, args, kwargs = parse_command(command, int(time.time()))
+    if name not in COMMANDS:
+        raise ValueError(f"неизвестная команда {name}, см. help")
+    return format_result(getattr(backend, name)(*args, **kwargs))
+
+
 def execute(backend, line):
     """Выполнить одну команду REPL и вернуть текст ответа.
 
@@ -89,24 +120,26 @@ def execute(backend, line):
         клиент RPC).
     """
     command = line.strip()
+    if command in SERVICE_COMMANDS:
+        return SERVICE_COMMANDS[command]()
     if not command:
         return ""
-    if command == "help":
-        return help_text()
-    if command == "now":
-        return str(int(time.time()))
     try:
-        name, args, kwargs = parse_command(command, int(time.time()))
-        if name not in COMMANDS:
-            raise ValueError(f"неизвестная команда {name}, см. help")
-        result = getattr(backend, name)(*args, **kwargs)
-    except (ModelError, ProtocolError) as error:
-        return f"Ошибка {type(error).__name__}: {error}"
-    except (SyntaxError, ValueError, TypeError) as error:
-        return f"Ошибка ввода: {error}"
-    except ConnectionError as error:
-        return f"Ошибка соединения: {error}"
-    return format_result(result)
+        return _call(backend, command)
+    except HANDLED_ERRORS as error:
+        return describe_error(error)
+
+
+def _read_line(prompt, echo):
+    """Прочитать строку ввода; None — конец ввода."""
+    try:
+        line = input(prompt)
+    except EOFError:
+        print()
+        return None
+    if echo:
+        print(line)
+    return line
 
 
 def run(backend, echo=False, prompt=PROMPT):
@@ -116,19 +149,12 @@ def run(backend, echo=False, prompt=PROMPT):
     :param prompt: приглашение к вводу.
     """
     print("REPL модели данных. Справка: help, выход: exit.")
-    while True:
-        try:
-            line = input(prompt)
-        except EOFError:
-            print()
-            break
-        if echo:
-            print(line)
-        if line.strip() in EXIT_COMMANDS:
-            break
+    line = _read_line(prompt, echo)
+    while line is not None and line.strip() not in EXIT_COMMANDS:
         output = execute(backend, line)
         if output:
             print(output)
+        line = _read_line(prompt, echo)
 
 
 def main():

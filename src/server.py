@@ -113,21 +113,19 @@ def create_server(host=DEFAULT_HOST, port=DEFAULT_PORT):
     return RpcServer((host, port), RpcHandler)
 
 
-def configure_logging():
-    """Направить журнал RPC в стандартный вывод."""
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    LOGGER.addHandler(handler)
-    LOGGER.setLevel(logging.INFO)
-
-
 def main():
-    """Точка входа: python -m src.server [--host HOST] [--port PORT]."""
+    """Точка входа: python -m src.server [--host HOST] [--port PORT].
+
+    Журнал RPC направляется в стандартный вывод.
+    """
     parser = argparse.ArgumentParser(description="Сервер RPC на основе TCP")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
-    configure_logging()
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
     with create_server(args.host, args.port) as server:
         LOGGER.info("сервер RPC запущен на %s:%d", *server.server_address)
         try:
