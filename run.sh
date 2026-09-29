@@ -13,6 +13,7 @@ usage() {
     echo "  server    запустить сервер RPC на \$HOST:\$PORT"
     echo "  client    REPL через клиент RPC к серверу \$HOST:\$PORT"
     echo "  demo-rpc  запустить сервер и выполнить демонстрацию через RPC"
+    echo "  test      тесты MBT (hypothesis) с отчётом о покрытии (coverage)"
     echo "  lint      проверка кода flake8 (PEP8, имена, сложность)"
     echo "Переменные окружения: PYTHON, HOST (127.0.0.1), PORT (9090)."
 }
@@ -33,6 +34,10 @@ case "$1" in
     server) "$PYTHON" -m src.server --host "$HOST" --port "$PORT" ;;
     client) "$PYTHON" -m src.repl --remote "$HOST:$PORT" ;;
     demo-rpc) demo_rpc ;;
+    test)
+        "$PYTHON" -m coverage run -m unittest discover -s tests -t . -v
+        "$PYTHON" -m coverage report
+        ;;
     lint) "$PYTHON" -m flake8 src tests ;;
     *) usage ;;
 esac

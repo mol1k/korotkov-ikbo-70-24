@@ -14,6 +14,8 @@ Prompt и Result. Работа выполняется по этапам:
 1. Модель слоя доступа к данным и интерактивный режим (REPL).
 2. Удалённый вызов процедур (RPC) на основе TCP: сервер с журналом
    запросов и ответов и клиент в виде класса.
+3. Тестирование RPC на основе модели (MBT) с помощью hypothesis и
+   отчёт о покрытии кода по ветвям (coverage).
 
 Требуется Python 3.10 или новее.
 
@@ -30,7 +32,9 @@ Prompt и Result. Работа выполняется по этапам:
 | `examples/demo.txt` | сценарий демонстрации для REPL |
 | `requirements.txt` | зависимости |
 | `.flake8` | настройки проверки кода |
-| `tests/` | тесты |
+| `tests/test_rpc_state_machine.py` | тесты MBT (`RuleBasedStateMachine`) |
+| `tests/reference_model.py` | упрощённая модель для MBT |
+| `.coveragerc` | настройки coverage |
 | `run.sh` | скрипт запуска |
 
 ## Схема данных
@@ -248,6 +252,7 @@ with RpcClient("127.0.0.1", 9090) as client:
 | `./run.sh server` | сервер RPC (журнал в стандартный вывод) |
 | `./run.sh client` | REPL через клиент RPC (сервер должен быть запущен) |
 | `./run.sh demo-rpc` | запуск сервера и демонстрация через RPC |
+| `./run.sh test` | тесты MBT с замером покрытия и отчёт |
 | `./run.sh lint` | проверка кода flake8 |
 
 Адрес и порт задаются переменными: `PORT=9191 ./run.sh server`.
@@ -258,6 +263,8 @@ with RpcClient("127.0.0.1", 9090) as client:
 python -m src.repl
 python -m src.server --port 9090
 python -m src.repl --remote 127.0.0.1:9090
+python -m coverage run -m unittest discover -s tests -v
+python -m coverage report
 ```
 
 ### Интерактивный режим
@@ -266,6 +273,74 @@ python -m src.repl --remote 127.0.0.1:9090
 Python. Имя `now` в аргументах означает текущее Unix-время, к нему
 можно прибавлять и вычитать числа: `create_client(time=now - 60)`.
 Служебные команды: `help` (список функций), `now`, `exit`.
+
+## Тестирование на основе модели
+
+Тесты находятся в `tests/` и используют класс `RuleBasedStateMachine`
+из библиотеки hypothesis.
+
+- **Сложная система** — сервер RPC (`src/server.py` и модель
+  `src/model.py`), запускается в отдельном потоке на свободном порту;
+  с ним тест работает только через клиент `RpcClient`.
+- **Упрощённая модель** — `tests/reference_model.py`: таблицы в
+  словарях `{id: {поле: значение}}`, без проверок типов и ссылок.
+
+hypothesis генерирует случайные последовательности правил (до 40 шагов,
+200 сценариев) и выполняет каждое правило одновременно над сервером и
+над упрощённой моделью. После каждого шага инвариант
+`tables_match_reference` сравнивает результаты `get_clients`,
+`get_prompts`, `get_results` с состоянием упрощённой модели. При
+расхождении hypothesis сокращает сценарий до минимального и печатает
+его.
+
+| Группа правил | Что проверяется |
+|---|---|
+| `create_client`, `create_prompt`, `create_result` | созданная запись совпадает с моделью; id попадают в наборы (`Bundle`) для следующих шагов |
+| `update_client`, `update_prompt`, `update_result` | изменение любых подмножеств полей, перенос Prompt и Result к другой родительской записи |
+| `get_recent_prompts`, `get_recent_prompts_at_current_time`, `create_duplicate_prompt` | выборка по формуле совпадает с моделью для разных моментов `now` и для текущего времени; повторяющиеся строки удаляются |
+| `*_with_bad_field`, `update_with_bad_id`, `get_recent_prompts_with_bad_now`, `create_*_without_*` | `ValidationError`, состояние не меняется |
+| `*_missing_*`, `update_missing_record` | `NotFoundError` для несуществующих записей и ссылок |
+| `send_unsupported_value`, `send_string_invalid_in_xml` | `ProtocolError` на клиенте до отправки |
+| `send_unknown_operation`, `send_malformed_xml`, `send_bad_request_structure` | ответ со статусом 3 (ошибка протокола) |
+| `send_oversized_request`, `send_truncated_request` | сервер закрывает соединение при слишком большом или неполном запросе |
+
+Все 10 методов RPC и все ветви кода серверной и клиентской частей
+покрываются **только** тестами, сгенерированными hypothesis. Замер
+выполняется по ветвям (`branch = True` в `.coveragerc`). В замер не
+входят `src/repl.py` (интерфейс командной строки этапа 1) и функции
+`main` запуска из командной строки.
+
+Запуск:
+
+```sh
+./run.sh install
+./run.sh test
+```
+
+Отчёт о покрытии кода тестами на основе ветвей (`coverage report`):
+
+```
+Name              Stmts   Miss Branch BrPart  Cover   Missing
+-------------------------------------------------------------
+src/__init__.py       0      0      0      0   100%
+src/client.py        50      0      2      0   100%
+src/errors.py         4      0      0      0   100%
+src/model.py         85      0     22      0   100%
+src/protocol.py     114      0     18      0   100%
+src/server.py        68      0      8      0   100%
+-------------------------------------------------------------
+TOTAL               321      0     50      0   100%
+```
+
+Подробный HTML-отчёт: `python -m coverage html` (папка `htmlcov/`).
+
+## Проверка оформления кода
+
+`./run.sh lint` запускает flake8 с плагином pep8-naming
+(настройки в `.flake8`): стиль и имена по PEP8, длина строк не более
+79 символов, цикломатическая сложность функций не более 5. Код не
+содержит комментариев, кроме docstring, а числовые константы в
+сравнениях вынесены в именованные константы.
 
 ## Примеры использования
 
@@ -392,11 +467,11 @@ model> exit
 rpc> get_clients()
 (нет записей)
 rpc> create_client(time=now - 60, platform="linux")
-[1, 1791233621, 'linux']
+[1, 1791234323, 'linux']
 rpc> create_client(time=now - 3600, platform="windows")
-[2, 1791230081, 'windows']
+[2, 1791230783, 'windows']
 rpc> create_client(time=now - 120)
-[3, 1791233561, None]
+[3, 1791234263, None]
 rpc> create_client(time="вчера", platform="linux")
 Ошибка ValidationError: поле time: ожидается int, получено str
 rpc> create_client(platform=42)
@@ -418,20 +493,20 @@ rpc> get_recent_prompts()
 запрос: код=2 (get_clients) размер=11 тело=<request />
 ответ: код=2 статус=0 размер=29 тело=<response><list /></response>
 запрос: код=1 (create_client) размер=106 тело=<request><arg
-    name="time"><int>1791233621</int></arg><arg
+    name="time"><int>1791234323</int></arg><arg
     name="platform"><str>linux</str></arg></request>
 ответ: код=1 статус=0 размер=83 тело=<response><list><int>1</int><int>179123
-    3621</int><str>linux</str></list></response>
+    4323</int><str>linux</str></list></response>
 запрос: код=1 (create_client) размер=108 тело=<request><arg
-    name="time"><int>1791230081</int></arg><arg
+    name="time"><int>1791230783</int></arg><arg
     name="platform"><str>windows</str></arg></request>
 ответ: код=1 статус=0 размер=85 тело=<response><list><int>2</int><int>179123
-    0081</int><str>windows</str></list></response>
+    0783</int><str>windows</str></list></response>
 запрос: код=1 (create_client) размер=98 тело=<request><arg
-    name="time"><int>1791233561</int></arg><arg name="platform"><none
+    name="time"><int>1791234263</int></arg><arg name="platform"><none
     /></arg></request>
 ответ: код=1 статус=0 размер=75
-    тело=<response><list><int>3</int><int>1791233561</int><none
+    тело=<response><list><int>3</int><int>1791234263</int><none
     /></list></response>
 запрос: код=1 (create_client) размер=106 тело=<request><arg
     name="time"><str>вчера</str></arg><arg

@@ -1,2 +1,4 @@
+hypothesis>=6.100
+coverage>=7.4
 flake8>=7.0
 pep8-naming>=0.14
