@@ -8,3 +8,4 @@ venv/
 .coverage.*
 htmlcov/
 .hypothesis/
+.DS_Store
