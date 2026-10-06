@@ -22,7 +22,8 @@
     <response><error>текст ошибки</error></response>
 """
 import re
-import xml.etree.ElementTree as ElementTree
+from xml.etree.ElementTree import (
+    Element, ParseError, SubElement, fromstring, tostring)
 
 from src.errors import NotFoundError, ProtocolError, ValidationError
 
@@ -76,14 +77,14 @@ def operation_name(code):
 
 def _text_element(tag, text):
     """Создать элемент XML с текстом."""
-    element = ElementTree.Element(tag)
+    element = Element(tag)
     element.text = text
     return element
 
 
 def _encode_none(value):
     """Закодировать None."""
-    return ElementTree.Element("none")
+    return Element("none")
 
 
 def _encode_int(value):
@@ -100,7 +101,7 @@ def _encode_str(value):
 
 def _encode_list(value):
     """Закодировать список значений."""
-    element = ElementTree.Element("list")
+    element = Element("list")
     element.extend(value_to_xml(item) for item in value)
     return element
 
@@ -156,14 +157,14 @@ def xml_to_value(element):
 def _parse(body):
     """Разобрать тело сообщения в формате XML."""
     try:
-        return ElementTree.fromstring(body)
-    except ElementTree.ParseError as error:
+        return fromstring(body)
+    except ParseError as error:
         raise ProtocolError(f"некорректный XML: {error}") from None
 
 
 def _to_bytes(root):
     """Сериализовать элемент XML в байты UTF-8."""
-    return ElementTree.tostring(root, encoding=ENCODING)
+    return tostring(root, encoding=ENCODING)
 
 
 def pack_request(code, body):
@@ -187,9 +188,9 @@ def unpack_request_header(header):
 
 def encode_request(name, arguments):
     """Закодировать вызов функции name с именованными аргументами."""
-    root = ElementTree.Element("request")
+    root = Element("request")
     for key, value in arguments.items():
-        argument = ElementTree.SubElement(root, "arg", name=key)
+        argument = SubElement(root, "arg", name=key)
         argument.append(value_to_xml(value))
     return pack_request(OPCODES[name], _to_bytes(root))
 
@@ -226,15 +227,15 @@ def _pack_response(code, status, root):
 
 def encode_response(code, value):
     """Закодировать успешный ответ со значением value."""
-    root = ElementTree.Element("response")
+    root = Element("response")
     root.append(value_to_xml(value))
     return _pack_response(code, STATUS_OK, root)
 
 
 def encode_error(code, error):
     """Закодировать ответ с ошибкой модели или протокола."""
-    root = ElementTree.Element("response")
-    ElementTree.SubElement(root, "error").text = str(error)
+    root = Element("response")
+    SubElement(root, "error").text = str(error)
     return _pack_response(code, ERROR_STATUSES[type(error)], root)
 
 

@@ -31,7 +31,7 @@ class Column(NamedTuple):
     reference: str | None = None
 
 
-class _Keep:
+class KeepMarker:
     """Тип маркера «оставить значение поля без изменений»."""
 
     def __repr__(self):
@@ -39,7 +39,7 @@ class _Keep:
         return "KEEP"
 
 
-KEEP = _Keep()
+KEEP = KeepMarker()
 
 SCHEMA = {
     "Client": (

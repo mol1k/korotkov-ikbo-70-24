@@ -3,8 +3,8 @@
 Машина состояний RpcStateMachine одновременно выполняет случайные
 последовательности вызовов через клиент RPC (сложная система) и над
 упрощённой моделью ReferenceModel, после каждого шага сравнивая их
-состояния. Сервер RPC запускается в отдельном потоке на свободном
-порту.
+состояния. Сервер RPC запускается один раз в фоновом потоке на
+свободном порту.
 """
 import socket
 import threading
@@ -101,6 +101,19 @@ def _request_header(code, length):
     )
 
 
+_SERVER = {}
+
+
+def server_address():
+    """Запустить сервер RPC в фоновом потоке (один раз) и вернуть адрес."""
+    if "address" not in _SERVER:
+        server = create_server(port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        _SERVER["address"] = server.server_address
+    return _SERVER["address"]
+
+
 def _expect(expected, method, /, *args, **kwargs):
     """Проверить, что вызов завершается исключением expected."""
     try:
@@ -113,7 +126,6 @@ def _expect(expected, method, /, *args, **kwargs):
 class RpcStateMachine(RuleBasedStateMachine):
     """Машина состояний: RPC-сервер против упрощённой модели."""
 
-    address = None
     clients = Bundle("clients")
     prompts = Bundle("prompts")
     results = Bundle("results")
@@ -123,7 +135,7 @@ class RpcStateMachine(RuleBasedStateMachine):
         super().__init__()
         model.reset_storage()
         self.reference = ReferenceModel()
-        self.rpc = RpcClient(*self.address)
+        self.rpc = RpcClient(*server_address())
 
     def teardown(self):
         """Закрыть соединение после завершения сценария."""
@@ -314,7 +326,7 @@ class RpcStateMachine(RuleBasedStateMachine):
     def send_oversized_request(self, code, extra):
         """Слишком большое тело: ошибка и закрытие соединения."""
         header = _request_header(code, protocol.MAX_BODY_SIZE + extra)
-        with RpcClient(*self.address) as rpc:
+        with RpcClient(*server_address()) as rpc:
             _, status, _ = rpc.send_raw(header)
             assert status == protocol.STATUS_PROTOCOL
             _expect(ConnectionError, rpc.send_raw, b"")
@@ -324,7 +336,7 @@ class RpcStateMachine(RuleBasedStateMachine):
         """Соединение закрыто до получения всего тела запроса."""
         body = b"<request />"
         header = _request_header(code, len(body) + missing)
-        with socket.create_connection(self.address) as connection:
+        with socket.create_connection(server_address()) as connection:
             connection.sendall(header + body)
             connection.shutdown(socket.SHUT_WR)
             assert connection.recv(1) == b""
@@ -342,20 +354,3 @@ class TestRpcStateMachine(RpcStateMachine.TestCase):
 
     settings = settings(max_examples=200, stateful_step_count=40,
                         deadline=None)
-
-    @classmethod
-    def setUpClass(cls):
-        """Запустить сервер RPC в отдельном потоке."""
-        super().setUpClass()
-        cls.server = create_server(port=0)
-        RpcStateMachine.address = cls.server.server_address
-        cls.thread = threading.Thread(target=cls.server.serve_forever)
-        cls.thread.start()
-
-    @classmethod
-    def tearDownClass(cls):
-        """Остановить сервер RPC."""
-        cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join()
-        super().tearDownClass()
